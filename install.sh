@@ -614,6 +614,7 @@ Continue anyway?" 15 76; then
   detect_local_lan_ip
   TAR1090_LOCAL_URL="http://${LOCAL_LAN_IP}${TAR1090_WEB_PATH}"
   TAR1090_INSTALLED="yes"
+  sudo touch "$CONFIG_DIR/tar1090-installed"
   sudo sed -i '/^TAR1090_LOCAL_URL=/d' "$CONFIG_FILE"
   echo "TAR1090_LOCAL_URL=${TAR1090_LOCAL_URL}" | sudo tee -a "$CONFIG_FILE" >/dev/null
   sudo chmod 600 "$CONFIG_FILE"

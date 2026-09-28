@@ -3,9 +3,15 @@ set -euo pipefail
 
 FEED_SERVICE="adsbitalia-feed.service"
 MLAT_SERVICE="adsbitalia-mlat.service"
+REG_SERVICE="adsbitalia-registration.service"
+REG_TIMER="adsbitalia-registration.timer"
 
 FEED_UNIT="/etc/systemd/system/${FEED_SERVICE}"
 MLAT_UNIT="/etc/systemd/system/${MLAT_SERVICE}"
+REG_UNIT="/etc/systemd/system/${REG_SERVICE}"
+REG_TIMER_UNIT="/etc/systemd/system/${REG_TIMER}"
+
+REG_HEARTBEAT_SCRIPT="/usr/local/sbin/adsbitalia-register-heartbeat"
 
 MLAT_VENV="/opt/adsbitalia-mlat"
 
@@ -52,7 +58,7 @@ remove_service() {
     local service="$1"
     local unit="$2"
 
-    if systemctl list-unit-files | grep -q "^${service}"; then
+    if systemctl list-unit-files 2>/dev/null | grep -q "^${service}"; then
         msg "Stopping ${service}..."
         systemctl stop "${service}" 2>/dev/null || true
 
@@ -68,6 +74,10 @@ remove_service() {
     if [[ -L "/etc/systemd/system/multi-user.target.wants/${service}" ]]; then
         rm -f "/etc/systemd/system/multi-user.target.wants/${service}"
     fi
+
+    if [[ -L "/etc/systemd/system/timers.target.wants/${service}" ]]; then
+        rm -f "/etc/systemd/system/timers.target.wants/${service}"
+    fi
 }
 
 remove_path() {
@@ -80,14 +90,17 @@ remove_path() {
 }
 
 adsbitalia_tar1090_detected() {
+    # 1. Check for dedicated marker file created exclusively by ADSBItalia installer
     if [[ -f "$ADSBITALIA_TAR1090_MARKER" ]]; then
         return 0
     fi
 
-    if [[ -f "$CONFIG_FILE" ]] && grep -q '^TAR1090_LOCAL_URL=' "$CONFIG_FILE"; then
+    # 2. Only consider configured URL if it contains a non-empty, valid URL scheme (not just TAR1090_LOCAL_URL=)
+    if [[ -f "$CONFIG_FILE" ]] && grep -q '^TAR1090_LOCAL_URL=https\?://' "$CONFIG_FILE"; then
         return 0
     fi
 
+    # 3. Check for ADSBItalia custom branding files injected into tar1090
     for dir in "${TAR1090_HTML_DIRS[@]}"; do
         if [[ -f "${dir}/adsbitalia-brand.css" || -f "${dir}/adsbitalia-brand.js" ]]; then
             return 0
@@ -133,7 +146,7 @@ PY
 
 remove_optional_tar1090() {
     if ! adsbitalia_tar1090_detected; then
-        msg "Optional ADSBItalia tar1090 local map not detected. Skipping tar1090 removal."
+        msg "Optional ADSBItalia tar1090 local map not detected or not installed by ADSBItalia. Skipping tar1090 removal to preserve existing web views."
         return 0
     fi
 
@@ -142,7 +155,7 @@ remove_optional_tar1090() {
     remove_adsbitalia_tar1090_branding
 
     for unit in tar1090.service tar1090.timer; do
-        if systemctl list-unit-files | grep -q "^${unit}"; then
+        if systemctl list-unit-files 2>/dev/null | grep -q "^${unit}"; then
             msg "Stopping ${unit}..."
             systemctl stop "$unit" 2>/dev/null || true
 
@@ -171,12 +184,23 @@ main() {
 
     msg "Removing ADSBItalia services..."
 
+    # Stop and remove feed service
     remove_service "${FEED_SERVICE}" "${FEED_UNIT}"
+    
+    # Stop and remove MLAT client service
     remove_service "${MLAT_SERVICE}" "${MLAT_UNIT}"
+
+    # Stop and remove registration heartbeat service and timer
+    remove_service "${REG_TIMER}" "${REG_TIMER_UNIT}"
+    remove_service "${REG_SERVICE}" "${REG_UNIT}"
+
+    # Remove registration heartbeat script
+    remove_path "${REG_HEARTBEAT_SCRIPT}"
 
     msg "Reloading systemd..."
     systemctl daemon-reload
 
+    # Safely handle optional tar1090 removal if installed by ADSBItalia
     remove_optional_tar1090
 
     if [[ -d "${MLAT_VENV}" ]]; then
@@ -189,9 +213,9 @@ main() {
         rm -rf "${CONFIG_DIR}"
     fi
 
-    msg "Cleanup completed."
+    msg "Cleanup completed successfully."
     msg "Your main readsb/dump1090 installation was NOT modified."
+    msg "Note: System packages (e.g. socat, python3-venv) were kept intact to ensure other feeders remain fully functional."
 }
 
 main "$@"
-
