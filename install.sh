@@ -155,6 +155,11 @@ Spaces will be converted to underscores." \
   ALT="$(whiptail --inputbox "Enter altitude in meters.\n\nExample: 5" \
     12 60 "$alt_default" --title "Altitude" 3>&1 1>&2 2>&3)" || exit 1
 
+  local email_default="${EMAIL:-}"
+  EMAIL="$(whiptail --inputbox "Enter your email address (optional).\n\nReceive instant alerts if your station goes offline, MLAT sync warnings, and weekly/monthly performance digests.\n\nLeave blank to skip." \
+    16 72 "$email_default" --title "Alert Notifications (Optional)" 3>&1 1>&2 2>&3)" || true
+  EMAIL="$(echo "${EMAIL:-}" | tr -d '[:space:]')"
+
   local mlat_return_default="${MLAT_RETURN_PORT:-$MLAT_RETURN_PORT_DEFAULT}"
 
   LOCAL_BEAST_PORT="$(whiptail --inputbox "Enter your local Beast OUT port.
@@ -242,6 +247,7 @@ FEEDER_TOKEN=$FEEDER_TOKEN
 LAT=$LAT
 LON=$LON
 ALT=$ALT
+EMAIL=${EMAIL:-}
 LOCAL_BEAST_PORT=$LOCAL_BEAST_PORT
 FEED_HOST=$FEED_HOST
 MLAT_HOST=$MLAT_HOST
@@ -475,6 +481,20 @@ enable_services() {
   else
     msg "Initial registration heartbeat failed; timer will retry automatically."
   fi
+
+  # Optional feeder email alerts subscription
+  if [[ -n "${EMAIL:-}" ]]; then
+    msg "Subscribing ${EMAIL} to ADSBItalia feeder alerts..."
+    local alert_res
+    alert_res="$(curl -4fsS --connect-timeout 8 --max-time 15 -X POST "${SITE_URL}/api/alerts/subscribe" \
+      -H "Content-Type: application/json" \
+      -d "{\"station\":\"${FEEDER_NAME}\",\"email\":\"${EMAIL}\"}" 2>&1 || true)"
+    if echo "$alert_res" | grep -q '"success":true'; then
+      msg "Alert subscription initiated! A verification email has been sent to ${EMAIL}."
+    else
+      msg "Note: Feeder alerts can be verified on ${SITE_URL}/status.html once online."
+    fi
+  fi
 }
 
 # ── Optional tar1090 local map ───────────────────────────────────────────────
@@ -655,6 +675,13 @@ show_status() {
   mlat_state="$(systemctl is-active adsbitalia-mlat.service || true)"
   heartbeat_state="$(systemctl is-active adsbitalia-registration.timer || true)"
 
+  local alerts_text
+  if [[ -n "${EMAIL:-}" ]]; then
+    alerts_text="Feeder alerts:\nConfigured for ${EMAIL} (Check inbox to verify)"
+  else
+    alerts_text="Feeder alerts:\nNot configured (You can subscribe anytime on ${SITE_URL}/status.html)"
+  fi
+
   if [[ "${TAR1090_INSTALLED:-no}" == "yes" && -n "${TAR1090_LOCAL_URL:-}" ]]; then
     map_text="Optional local map:\n${TAR1090_LOCAL_URL}"
   else
@@ -671,6 +698,8 @@ Local Beast OUT port: ${LOCAL_BEAST_PORT}
 MLAT results return port: ${MLAT_RETURN_PORT}
 Feed destination: ${FEED_HOST}:${FEED_PORT}
 MLAT destination: ${MLAT_HOST}:${MLAT_PORT}
+
+${alerts_text}
 
 ${map_text}
 
