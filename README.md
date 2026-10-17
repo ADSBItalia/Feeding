@@ -125,6 +125,11 @@ The status page provides real-time verification of:
 - MLAT client synchronization & peer count
 - Uptime and last ping timestamp
 
+### 🔔 Feeder Email Alerts & Weekly/Monthly Digests
+Want instant email notifications if your receiver goes offline or loses MLAT synchronization, plus weekly performance summaries and monthly radar milestone reports?
+- **Classic Linux Installer (`install.sh`)**: Prompts for an optional email during setup and subscribes your station automatically.
+- **Docker Ultrafeeder & ADSB.im**: Open **[https://adsbitalia.it/status.html](https://adsbitalia.it/status.html)** from any device on your local network. Your station is automatically detected via your public IP, letting you register your email with a single click.
+
 ---
 
 ## 🛠️ Management & Useful Commands
