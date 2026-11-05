@@ -2,9 +2,13 @@
 # ADSBItalia feeder installer
 # Includes stable feeder identity and automatic registration heartbeat.
 
-if [[ ! -t 0 || ! -t 1 ]]; then
-  echo "This installer must be run in an interactive terminal."
-  exit 1
+if [[ ! -t 0 ]]; then
+  if [[ -r /dev/tty ]]; then
+    exec < /dev/tty
+  else
+    echo "This installer requires an interactive terminal or TTY."
+    exit 1
+  fi
 fi
 
 set -euo pipefail
@@ -61,9 +65,9 @@ install_packages() {
     sudo pacman -Syu --noconfirm --needed \
       whiptail curl git python python-pip base-devel iproute2 socat
   else
-    sudo apt update
-    sudo apt install -y \
-      whiptail curl git ca-certificates python3 python3-pip python3-venv \
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+    sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends \
+      whiptail curl git ca-certificates python3 python3-dev python3-pip python3-venv \
       python3-setuptools gcc build-essential iproute2 socat
   fi
 }
@@ -201,35 +205,53 @@ Common examples:
 
 check_local_feed() {
   msg "Checking local Beast OUT feed on localhost:${LOCAL_BEAST_PORT}..."
-  if ! timeout 3 bash -c "</dev/tcp/127.0.0.1/${LOCAL_BEAST_PORT}" 2>/dev/null; then
-    whiptail --title "Local Beast feed not found" --msgbox "No Beast feed was detected on localhost:${LOCAL_BEAST_PORT}.
-
-Select a local Beast OUT port from your existing readsb/dump1090 installation." 14 74
-    exit 1
+  local feed_ok=0
+  if python3 -c "import socket; s=socket.socket(); s.settimeout(2.0); s.connect(('127.0.0.1', int('$LOCAL_BEAST_PORT'))); s.close()" >/dev/null 2>&1; then
+    feed_ok=1
+  elif python3 -c "import socket; s=socket.socket(socket.AF_INET6, socket.SOCK_STREAM); s.settimeout(2.0); s.connect(('::1', int('$LOCAL_BEAST_PORT'))); s.close()" >/dev/null 2>&1; then
+    feed_ok=1
   fi
-  msg "Local Beast feed reachable."
+
+  if [[ "$feed_ok" -eq 1 ]]; then
+    msg "Local Beast feed reachable."
+  else
+    if ! whiptail --title "Local Beast feed not detected" --yesno "No active Beast feed was detected on port ${LOCAL_BEAST_PORT}.
+
+This can happen if readsb/dump1090 is still starting up or uses a different port.
+
+Do you want to proceed anyway with port ${LOCAL_BEAST_PORT}?" 15 74; then
+      fatal "Installation cancelled: local Beast feed on port ${LOCAL_BEAST_PORT} not found."
+    fi
+    msg "Continuing with local Beast port ${LOCAL_BEAST_PORT} as selected."
+  fi
 }
 
 check_adsbitalia_dns() {
   msg "Checking ADSBItalia DNS records..."
-  getent ahostsv4 "$FEED_HOST" >/dev/null 2>&1 || fatal "Unable to resolve ${FEED_HOST}."
-  getent ahostsv4 "$MLAT_HOST" >/dev/null 2>&1 || fatal "Unable to resolve ${MLAT_HOST}."
+  if ! getent ahostsv4 "$FEED_HOST" >/dev/null 2>&1; then
+    msg "Warning: Unable to resolve ${FEED_HOST}, falling back to adsbitalia.it..."
+    FEED_HOST="adsbitalia.it"
+  fi
+  if ! getent ahostsv4 "$MLAT_HOST" >/dev/null 2>&1; then
+    msg "Warning: Unable to resolve ${MLAT_HOST}, falling back to adsbitalia.it..."
+    MLAT_HOST="adsbitalia.it"
+  fi
 
-  FEED_IP="$(getent ahostsv4 "$FEED_HOST" | awk 'NR==1 {print $1}')"
-  MLAT_IP="$(getent ahostsv4 "$MLAT_HOST" | awk 'NR==1 {print $1}')"
+  FEED_IP="$(getent ahostsv4 "$FEED_HOST" 2>/dev/null | awk 'NR==1 {print $1}' || echo "185.119.19.188")"
+  MLAT_IP="$(getent ahostsv4 "$MLAT_HOST" 2>/dev/null | awk 'NR==1 {print $1}' || echo "185.119.19.188")"
   msg "DNS OK: ${FEED_HOST} -> ${FEED_IP}"
   msg "DNS OK: ${MLAT_HOST} -> ${MLAT_IP}"
 }
 
 check_remote_ports() {
   msg "Checking ADSBItalia remote ports..."
-  if timeout 5 bash -c "</dev/tcp/${FEED_HOST}/${FEED_PORT}" 2>/dev/null; then
+  if python3 -c "import socket; s=socket.socket(); s.settimeout(3.0); s.connect(('$FEED_HOST', int('$FEED_PORT'))); s.close()" >/dev/null 2>&1; then
     msg "Feed port reachable: ${FEED_HOST}:${FEED_PORT}"
   else
     msg "Warning: feed port not reachable now; service will retry after installation."
   fi
 
-  if timeout 5 bash -c "</dev/tcp/${MLAT_HOST}/${MLAT_PORT}" 2>/dev/null; then
+  if python3 -c "import socket; s=socket.socket(); s.settimeout(3.0); s.connect(('$MLAT_HOST', int('$MLAT_PORT'))); s.close()" >/dev/null 2>&1; then
     msg "MLAT port reachable: ${MLAT_HOST}:${MLAT_PORT}"
   else
     msg "Warning: MLAT port not reachable now; service will retry after installation."
@@ -275,17 +297,20 @@ install_mlat_client() {
 
   sudo mkdir -p "$MLAT_VENV"
   sudo python3 -m venv "$MLAT_VENV"
-  sudo "$MLAT_VENV/bin/pip" install --upgrade --timeout 120 --retries 10 pip setuptools wheel
+  sudo "$MLAT_VENV/bin/pip" install --upgrade --timeout 30 --retries 3 pip setuptools wheel
 
   sudo "$MLAT_VENV/bin/python" -c "import asyncore" >/dev/null 2>&1 || \
-    sudo "$MLAT_VENV/bin/pip" install --timeout 120 --retries 10 pyasyncore
+    sudo "$MLAT_VENV/bin/pip" install --timeout 30 --retries 3 pyasyncore || true
 
-  if ! git clone "$MLAT_REPO" "$tmpdir/mlat-client"; then
+  if ! git clone --depth 1 "$MLAT_REPO" "$tmpdir/mlat-client"; then
     rm -rf "$tmpdir"
     fatal "Unable to clone the official mlat-client repository."
   fi
 
-  sudo "$MLAT_VENV/bin/pip" install "$tmpdir/mlat-client"
+  if ! sudo "$MLAT_VENV/bin/pip" install --timeout 60 "$tmpdir/mlat-client"; then
+    rm -rf "$tmpdir"
+    fatal "Failed to build/install mlat-client. Ensure python3-dev and gcc are installed."
+  fi
   sudo rm -rf "$tmpdir"
 }
 
@@ -300,9 +325,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/socat -u TCP:127.0.0.1:${LOCAL_BEAST_PORT},connect-timeout=10 TCP:${FEED_HOST}:${FEED_PORT},connect-timeout=10
+ExecStart=/usr/bin/socat -u TCP:127.0.0.1:${LOCAL_BEAST_PORT},connect-timeout=10,keepalive,keepidle=30,keepintvl=10,keepcnt=3 TCP:${FEED_HOST}:${FEED_PORT},connect-timeout=10,keepalive,keepidle=30,keepintvl=10,keepcnt=3
 Restart=always
-RestartSec=3
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -378,7 +403,7 @@ REGISTER_URL="${REGISTER_URL:-https://adsbitalia.it/api/register-feeder}"
 detect_public_ip() {
   local url candidate
   for url in "${PUBLIC_IP_SERVICES[@]}"; do
-    candidate="$(curl -4fsS --connect-timeout 8 --max-time 12 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
+    candidate="$(curl -4fsS --connect-timeout 5 --max-time 8 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
     if [[ "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
       PUBLIC_IP="$candidate"
       return 0
@@ -389,7 +414,7 @@ detect_public_ip() {
 
 build_payload() {
   python3 - \
-    "$FEEDER_ID" "$FEEDER_TOKEN" "$FEEDER_NAME" "$PUBLIC_IP" "$HOSTNAME_LOCAL" \
+    "$FEEDER_ID" "$FEEDER_TOKEN" "$FEEDER_NAME" "${PUBLIC_IP:-}" "$HOSTNAME_LOCAL" \
     "$LOCAL_BEAST_PORT" "$FEED_HOST" "$FEED_PORT" "$MLAT_HOST" "$MLAT_PORT" \
     "$MLAT_RETURN_PORT" "$LAT" "$LON" "$ALT" <<'PY'
 import json
@@ -404,7 +429,7 @@ print(json.dumps({
     "feeder_id": feeder_id,
     "feeder_token": feeder_token,
     "user": user,
-    "host": host,
+    "host": host if host else "",
     "hostname": hostname,
     "beast_port": int(local_beast_port),
     "local_beast_port": int(local_beast_port),
@@ -421,7 +446,8 @@ print(json.dumps({
 PY
 }
 
-detect_public_ip || { log "Unable to detect current public IPv4."; exit 1; }
+PUBLIC_IP=""
+detect_public_ip || log "Notice: External public IP lookup timed out; server will auto-detect IPv4."
 HOSTNAME_LOCAL="$(hostname -f 2>/dev/null || hostname)"
 PAYLOAD="$(build_payload)"
 
@@ -431,7 +457,7 @@ if curl -4fsS \
   -H "Content-Type: application/json" \
   --data-binary "$PAYLOAD" \
   "$REGISTER_URL" >/dev/null; then
-  log "Registration heartbeat completed for ${FEEDER_NAME} (${PUBLIC_IP})."
+  log "Registration heartbeat completed for ${FEEDER_NAME} (${PUBLIC_IP:-auto-detected})."
 else
   log "Registration heartbeat failed."
   exit 1
@@ -619,7 +645,7 @@ Continue anyway?" 15 76; then
     return 0
   fi
 
-  if ! sudo bash "$tmpdir/tar1090/install.sh"; then
+  if ! sudo DEBIAN_FRONTEND=noninteractive bash "$tmpdir/tar1090/install.sh" < /dev/null; then
     rm -rf "$tmpdir"
     msg "tar1090 installation failed. Main feeder installation remains complete."
     return 0
