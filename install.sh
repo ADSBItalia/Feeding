@@ -33,11 +33,17 @@ MLAT_REPO="https://github.com/wiedehopf/mlat-client.git"
 MLAT_VENV="/opt/adsbitalia-mlat"
 MLAT_BIN="${MLAT_VENV}/bin/mlat-client"
 
-# ── Optional tar1090 local map ───────────────────────────────────────────────
-TAR1090_REPO="https://github.com/wiedehopf/tar1090.git"
-TAR1090_WEB_PATH="/tar1090/"
-TAR1090_INSTALLED="no"
-TAR1090_LOCAL_URL=""
+# ── Optional Station Radar (Avionics Map) ───────────────────────────────────
+STATION_RADAR_REPO="https://github.com/ADSBItalia/station-radar.git"
+STATION_RADAR_PORT="8088"
+STATION_RADAR_INSTALLED="no"
+STATION_RADAR_LOCAL_URL=""
+
+# ── Optional Station Graphs (RF Telemetry) ──────────────────────────────────
+STATION_GRAPHS_REPO="https://github.com/ADSBItalia/station-graphs.git"
+STATION_GRAPHS_PORT="8085"
+STATION_GRAPHS_INSTALLED="no"
+STATION_GRAPHS_LOCAL_URL=""
 
 PUBLIC_IP_SERVICES=(
   "https://api.ipify.org"
@@ -553,144 +559,80 @@ detect_ultrafeeder_docker() {
     | grep -Eiq 'ultrafeeder|docker-adsb-ultrafeeder|sdr-enthusiasts'
 }
 
-find_tar1090_html_dir() {
-  TAR1090_HTML_DIR=""
-  local dir
-  for dir in /usr/local/share/tar1090/html /usr/share/tar1090/html /var/www/html/tar1090; do
-    if [[ -f "$dir/index.html" ]]; then
-      TAR1090_HTML_DIR="$dir"
-      return 0
-    fi
-  done
-  return 1
-}
-
-apply_adsbitalia_tar1090_branding() {
-  msg "Applying ADSBItalia branding to tar1090..."
-  find_tar1090_html_dir || { msg "tar1090 HTML directory not found. Branding skipped."; return 0; }
-
-  sudo tee "${TAR1090_HTML_DIR}/adsbitalia-brand.css" >/dev/null <<'EOFCSS'
-#adsbitalia-local-badge {
-  position:absolute; z-index:10000; left:12px; bottom:12px;
-  display:inline-flex; align-items:center; gap:8px; padding:8px 11px;
-  border-radius:999px; border:1px solid rgba(42,166,166,.55);
-  background:rgba(13,16,20,.86); color:#edf2f7;
-  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  font-size:13px; line-height:1; box-shadow:0 8px 24px rgba(0,0,0,.35);
-  backdrop-filter:blur(8px);
-}
-#adsbitalia-local-badge strong { color:#7fe7e7; font-weight:700; }
-#adsbitalia-local-badge a { color:inherit; text-decoration:none; }
-#adsbitalia-local-badge a:hover { color:#7fe7e7; }
-@media (max-width:700px) {
-  #adsbitalia-local-badge { left:8px; bottom:8px; font-size:12px; padding:7px 9px; }
-}
-EOFCSS
-
-  sudo tee "${TAR1090_HTML_DIR}/adsbitalia-brand.js" >/dev/null <<'EOFJS'
-(function () {
-  "use strict";
-  document.title = "ADSBItalia Local Map";
-  function addBadge() {
-    if (document.getElementById("adsbitalia-local-badge")) return;
-    var badge = document.createElement("div");
-    badge.id = "adsbitalia-local-badge";
-    badge.innerHTML = '<a href="https://adsbitalia.it" target="_blank" rel="noopener noreferrer"><strong>ADSBItalia</strong> Local Map</a>';
-    document.body.appendChild(badge);
-  }
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", addBadge);
-  } else {
-    addBadge();
-  }
-})();
-EOFJS
-
-  sudo python3 - "${TAR1090_HTML_DIR}/index.html" <<'PY'
-from pathlib import Path
-import sys
-index = Path(sys.argv[1])
-html = index.read_text(encoding="utf-8", errors="ignore")
-css = '<link rel="stylesheet" href="adsbitalia-brand.css?v=1">'
-js = '<script src="adsbitalia-brand.js?v=1"></script>'
-if "adsbitalia-brand.css" not in html:
-    html = html.replace("</head>", f"  {css}\n</head>", 1) if "</head>" in html else css + "\n" + html
-if "adsbitalia-brand.js" not in html:
-    html = html.replace("</body>", f"  {js}\n</body>", 1) if "</body>" in html else html + "\n" + js + "\n"
-index.write_text(html, encoding="utf-8")
-PY
-}
-
-install_optional_tar1090() {
-  msg "Installing optional local tar1090 map..."
-
-  if ! detect_aircraft_json; then
-    if ! whiptail --title "aircraft.json not detected" --yesno "No local aircraft.json was detected.
-
-tar1090 may remain empty until readsb or dump1090 creates this file.
-
-Continue anyway?" 15 76; then
-      msg "Optional tar1090 local map skipped."
-      return 0
-    fi
-  else
-    msg "Detected local aircraft.json: ${AIRCRAFT_JSON_PATH}"
-  fi
-
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  if ! git clone --depth 1 "$TAR1090_REPO" "$tmpdir/tar1090"; then
-    rm -rf "$tmpdir"
-    msg "Unable to clone tar1090. Main feeder installation remains complete."
-    return 0
-  fi
-
-  if ! sudo DEBIAN_FRONTEND=noninteractive bash "$tmpdir/tar1090/install.sh" < /dev/null; then
-    rm -rf "$tmpdir"
-    msg "tar1090 installation failed. Main feeder installation remains complete."
-    return 0
-  fi
-  rm -rf "$tmpdir"
-
-  apply_adsbitalia_tar1090_branding
-  sudo systemctl restart lighttpd 2>/dev/null || true
-  sudo systemctl restart apache2 2>/dev/null || true
-  sudo systemctl restart nginx 2>/dev/null || true
-
+install_optional_station_radar() {
+  msg "Installing optional ADSBItalia Station Radar..."
   detect_local_lan_ip
-  TAR1090_LOCAL_URL="http://${LOCAL_LAN_IP}${TAR1090_WEB_PATH}"
-  TAR1090_INSTALLED="yes"
-  sudo touch "$CONFIG_DIR/tar1090-installed"
-  sudo sed -i '/^TAR1090_LOCAL_URL=/d' "$CONFIG_FILE"
-  echo "TAR1090_LOCAL_URL=${TAR1090_LOCAL_URL}" | sudo tee -a "$CONFIG_FILE" >/dev/null
-  sudo chmod 600 "$CONFIG_FILE"
+  if bash <(curl -sL https://raw.githubusercontent.com/ADSBItalia/station-radar/main/install.sh) < /dev/null; then
+    STATION_RADAR_LOCAL_URL="http://${LOCAL_LAN_IP}:${STATION_RADAR_PORT}"
+    STATION_RADAR_INSTALLED="yes"
+    sudo touch "$CONFIG_DIR/station-radar-installed"
+    sudo sed -i '/^STATION_RADAR_LOCAL_URL=/d' "$CONFIG_FILE"
+    echo "STATION_RADAR_LOCAL_URL=${STATION_RADAR_LOCAL_URL}" | sudo tee -a "$CONFIG_FILE" >/dev/null
+    sudo chmod 600 "$CONFIG_FILE"
+    whiptail --title "Station Radar Installed" --msgbox "The ADSBItalia Station Radar has been installed successfully.
 
-  whiptail --title "Local map installed" --msgbox "The optional ADSBItalia local map has been installed.
+Open it from any browser on your local network:
 
-Open it from another device on your local network:
+${STATION_RADAR_LOCAL_URL}
 
-${TAR1090_LOCAL_URL}" 15 78
+Station Control & Customization Panel:
+${STATION_RADAR_LOCAL_URL}/settings.html" 17 78
+  else
+    msg "Station Radar installation skipped or encountered an issue. Feeder remains active."
+  fi
 }
 
-ask_optional_tar1090() {
-  if [[ "$DISTRO" != "debian" ]]; then
-    msg "Optional tar1090 local map skipped on this distribution."
-    return 0
-  fi
+ask_optional_station_radar() {
+  if whiptail --title "ADSBItalia Station Radar (Optional)" --yesno "Do you want to install the ADSBItalia Station Radar?
 
-  if detect_ultrafeeder_docker; then
-    whiptail --title "Ultrafeeder detected" --msgbox "Ultrafeeder/Docker appears to be running.
+Features:
+- Modern avionics web radar (port 8088)
+- 3D terrain, runways & airspace boundaries
+- Bundled airline banners & autonomous vector logo generator
+- Direct multi-source aircraft photo engine
+- Responsive Station Control & Settings Panel (/settings.html)
 
-Do not install a separate tar1090 from this installer. Use the web interface already provided by Ultrafeeder." 14 76
-    return 0
-  fi
-
-  if whiptail --title "Optional local ADSBItalia map" --yesno "Do you want to install an optional local ADSBItalia map based on tar1090?
-
-Choose No if you already have a local map or only want to feed ADSBItalia." 15 76; then
-    install_optional_tar1090
+Choose No if you already have a local map or only wish to feed data." 18 78; then
+    install_optional_station_radar
   else
-    msg "Optional tar1090 local map skipped."
+    msg "Optional ADSBItalia Station Radar skipped."
+  fi
+}
+
+install_optional_station_graphs() {
+  msg "Installing optional Station Telemetry & RF Performance Graphs..."
+  detect_local_lan_ip
+  if bash <(curl -sL https://raw.githubusercontent.com/ADSBItalia/station-graphs/main/install.sh) < /dev/null; then
+    STATION_GRAPHS_LOCAL_URL="http://${LOCAL_LAN_IP}:${STATION_GRAPHS_PORT}"
+    STATION_GRAPHS_INSTALLED="yes"
+    sudo touch "$CONFIG_DIR/station-graphs-installed"
+    sudo sed -i '/^STATION_GRAPHS_LOCAL_URL=/d' "$CONFIG_FILE"
+    echo "STATION_GRAPHS_LOCAL_URL=${STATION_GRAPHS_LOCAL_URL}" | sudo tee -a "$CONFIG_FILE" >/dev/null
+    sudo chmod 600 "$CONFIG_FILE"
+    whiptail --title "Station Graphs Installed" --msgbox "ADSBItalia Station Telemetry & RF Graphs installed successfully.
+
+Open the interactive telemetry dashboard from your local browser:
+
+${STATION_GRAPHS_LOCAL_URL}" 16 78
+  else
+    msg "Station Graphs installation skipped or encountered an issue. Feeder remains active."
+  fi
+}
+
+ask_optional_station_graphs() {
+  if whiptail --title "Station Telemetry & RF Graphs (Optional)" --yesno "Do you want to install Station Telemetry & Performance Graphs?
+
+Features:
+- Real-time SDR metrics (Signal Peak, Median dBFS, Noise, SNR dB)
+- Live message rate & position demodulation rates
+- Interactive Chart.js historical telemetry (1h, 6h, 24h, 7d, 30d, 1yr)
+- Dynamic 360° antenna reception polar diagram
+- Live feeder health and network distribution monitor on port 8085
+
+Choose No if you do not need telemetry graphs." 18 78; then
+    install_optional_station_graphs
+  else
+    msg "Optional Station Telemetry & RF Graphs skipped."
   fi
 }
 
@@ -708,10 +650,17 @@ show_status() {
     alerts_text="Feeder alerts:\nNot configured (You can subscribe anytime on ${SITE_URL}/status.html)"
   fi
 
-  if [[ "${TAR1090_INSTALLED:-no}" == "yes" && -n "${TAR1090_LOCAL_URL:-}" ]]; then
-    map_text="Optional local map:\n${TAR1090_LOCAL_URL}"
+  local radar_text graphs_text
+  if [[ "${STATION_RADAR_INSTALLED:-no}" == "yes" && -n "${STATION_RADAR_LOCAL_URL:-}" ]]; then
+    radar_text="Local Station Radar:\n${STATION_RADAR_LOCAL_URL}"
   else
-    map_text="Optional local map:\nNot installed"
+    radar_text="Local Station Radar:\nNot installed"
+  fi
+
+  if [[ "${STATION_GRAPHS_INSTALLED:-no}" == "yes" && -n "${STATION_GRAPHS_LOCAL_URL:-}" ]]; then
+    graphs_text="Station Telemetry & RF Graphs:\n${STATION_GRAPHS_LOCAL_URL}"
+  else
+    graphs_text="Station Telemetry & RF Graphs:\nNot installed"
   fi
 
   whiptail --title "Installation Completed" --msgbox "ADSBItalia feeder installation completed.
@@ -727,7 +676,9 @@ MLAT destination: ${MLAT_HOST}:${MLAT_PORT}
 
 ${alerts_text}
 
-${map_text}
+${radar_text}
+
+${graphs_text}
 
 Useful commands:
 
@@ -736,7 +687,7 @@ sudo systemctl status adsbitalia-mlat
 sudo systemctl status adsbitalia-registration.timer
 
 sudo systemctl start adsbitalia-registration.service
-sudo journalctl -u adsbitalia-registration.service -n 50 --no-pager" 33 80
+sudo journalctl -u adsbitalia-registration.service -n 50 --no-pager" 36 80
 }
 
 main() {
@@ -755,7 +706,8 @@ main() {
   write_mlat_service
   write_registration_heartbeat
   enable_services
-  ask_optional_tar1090
+  ask_optional_station_radar
+  ask_optional_station_graphs
   show_status
 }
 

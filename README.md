@@ -63,7 +63,8 @@ curl -fsSL https://raw.githubusercontent.com/ADSBItalia/Feeding/main/install.sh 
 4. Automatically creates and enables systemd background services:
    - `adsbitalia-feed.service`: Forwards ADS-B Beast frames to `adsbitalia.it:31108`.
    - `adsbitalia-mlat.service`: Synchronizes with `mlat.adsbitalia.it:41113` via `mlat-client` and serves local MLAT return results.
-5. Optionally installs a dedicated, high-speed local `tar1090` radar map with ADSBItalia styling.
+5. Optionally installs the next-gen **[ADSBItalia Station Radar](https://github.com/ADSBItalia/station-radar)** (port 8088, 3D terrain, airline logos, multi-source aircraft photos, and Station Settings Panel).
+6. Optionally installs the **[ADSBItalia Station Graphs](https://github.com/ADSBItalia/station-graphs)** telemetry dashboard (port 8085, real-time RF signal metrics, noise floor, SNR, and 360° polar antenna coverage).
 
 > 💡 **Custom MLAT Return Port**: The installer automatically prompts you for your preferred local MLAT return port (default: `33106`). If you are running multiple receivers or custom decoders, you can specify any unused port (e.g. `30105`, `39008`). The installer configures `readsb` and `adsbitalia-mlat.service` to feed results directly into your local map.
 
