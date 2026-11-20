@@ -244,24 +244,19 @@ check_adsbitalia_dns() {
   done
 
   if (( needs_fallback == 1 )); then
-    msg "Notice: Local ISP/router DNS cannot resolve ADSBItalia domains. Applying automatic direct host mapping..."
+    msg "Notice: Local ISP/router DNS cannot resolve ADSBItalia domains. Applying direct host mapping in /etc/hosts..."
     sudo sed -i '/adsbitalia/d' /etc/hosts 2>/dev/null || true
     sudo tee -a /etc/hosts >/dev/null <<'EOF'
 5.231.80.21 adsbitalia.it
 185.119.19.188 feed.adsbitalia.it
 185.119.19.188 mlat.adsbitalia.it
 EOF
-    if grep -qE '^nameserver (192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' /etc/resolv.conf 2>/dev/null; then
-      if ! grep -q '8.8.8.8' /etc/resolv.conf 2>/dev/null; then
-        echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf >/dev/null 2>&1 || true
-      fi
-    fi
   fi
 
   FEED_IP="$(getent ahostsv4 "$FEED_HOST" 2>/dev/null | awk 'NR==1 {print $1}' || echo "185.119.19.188")"
   MLAT_IP="$(getent ahostsv4 "$MLAT_HOST" 2>/dev/null | awk 'NR==1 {print $1}' || echo "185.119.19.188")"
-  msg "DNS OK: ${FEED_HOST} -> ${FEED_IP}"
-  msg "DNS OK: ${MLAT_HOST} -> ${MLAT_IP}"
+  msg "Resolution OK: ${FEED_HOST} -> ${FEED_IP}"
+  msg "Resolution OK: ${MLAT_HOST} -> ${MLAT_IP}"
 }
 
 check_remote_ports() {

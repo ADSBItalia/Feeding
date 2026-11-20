@@ -213,6 +213,9 @@ main() {
         rm -rf "${CONFIG_DIR}"
     fi
 
+    # Clean any direct host mapping in /etc/hosts
+    sed -i '/adsbitalia/d' /etc/hosts 2>/dev/null || true
+
     msg "Cleanup completed successfully."
     msg "Your main readsb/dump1090 installation was NOT modified."
     msg "Note: System packages (e.g. socat, python3-venv) were kept intact to ensure other feeders remain fully functional."
